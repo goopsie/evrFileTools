@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -601,13 +600,6 @@ func writeManifest(manifest FullManifest, outputFolder string, packageName strin
 			fmt.Println("binary.Write failed:", err)
 		}
 	}
-	jFile, err := os.OpenFile("manifest.json", os.O_RDWR|os.O_CREATE, 0777)
-	if err != nil {
-		return err
-	}
-	jBytes, _ := json.Marshal(manifest)
-	jFile.Write(jBytes)
-	jFile.Close()
 
 	os.MkdirAll(outputFolder+"/manifests/", 0777)
 	file, err := os.OpenFile(outputFolder+"/manifests/"+packageName, os.O_RDWR|os.O_CREATE, 0777)
