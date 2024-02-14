@@ -13,7 +13,7 @@ the names of the subfolders created in outputFolder are the filetype symbols, th
 
 replacing files example:
 ```
-evr_replacefile -mode extract -packageName 48037dc70b0ecab2 -dataDir C:\Games\Oculus\Software\ready-at-dawn-echo-arena\_data\5932408047\rad15\win10 -modifiedFolder C:\Games\Oculus\Software\ready-at-dawn-echo-arena\_data\5932408047\rad15\win10\modified\ -outputFolder ./output/
+evr_replacefile -mode replace -packageName 48037dc70b0ecab2 -dataDir C:\Games\Oculus\Software\ready-at-dawn-echo-arena\_data\5932408047\rad15\win10 -modifiedFolder C:\Games\Oculus\Software\ready-at-dawn-echo-arena\_data\5932408047\rad15\win10\modified\ -outputFolder ./output/
 ```
 this will read all files in modifiedFolder, expecting the same folder structure as -mode extract outputs.
 if a file with the same filetype symbol & filename symbol exists in the manifest, it will edit the manifest & package file to match, and write out the contents of both to outputFolder.
