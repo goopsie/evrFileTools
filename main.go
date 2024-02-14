@@ -338,12 +338,6 @@ func doEverything(outputFolder string, dataDir string, manifest FullManifest, mo
 		activeFile = packages[newManifest.FileInfo[k].NextEntryPackageIndex]
 		activeFile.Seek(int64(newManifest.FileInfo[k].NextEntryOffset), 0)
 	}
-	fmt.Println("Setting SomeStructure1's unk1 & unk2 to 0")
-
-	for i := 0; i < len(newManifest.Unk1); i++ {
-		newManifest.Unk1[i].Unk1 = 0
-		newManifest.Unk1[i].Unk2 = 0
-	}
 
 	fmt.Println("Writing modified manifest...")
 	if err := writeManifest(newManifest, outputFolder, packageName); err != nil {
