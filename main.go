@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -37,26 +38,26 @@ type Manifest_header struct { // can't recreate
 type Header_chunk struct { // can't recreate
 	SectionSize  uint64
 	Unk1         [16]byte // ?
-	ElementSize  uint64
-	Count        uint64
-	ElementCount uint64
+	ElementSize  uint64   // size in bytes
+	Count        uint64   // number of elements
+	ElementCount uint64   // number of elements
 }
 
-type Frame_contents struct {
+type Frame_contents struct { // can recreate
 	T             int64  // Probably filetype
 	FileSymbol    int64  // Symbol for file
 	FileIndex     uint32 // Frame[FileIndex] = file containing this entry
 	DataOffset    uint32 // Byte offset for beginning of wanted data in given file
-	Size          uint32
+	Size          uint32 // Size of file
 	SomeAlignment uint32 // file divisible by this (could we get away by setting this to 1?)
 }
 
 type Some_structure1 struct { // can't recreate
-	T          int64   // seems to be the same as AssetType
-	FileSymbol int64   // filename symbol
-	Unk1       [8]byte // Not entirely unique, checksum maybe?
-	Unk2       [8]byte // Not entirely unique, checksum maybe?
-	AssetType  int64   // most likely file type lookup symbol echo uses
+	T          int64 // seems to be the same as AssetType
+	FileSymbol int64 // filename symbol
+	Unk1       int64 // ? - nothing seems to change when set to 0, seems fine
+	Unk2       int64 // ? - nothing seems to change when set to 0, seems fine
+	AssetType  int64 // ? - name from carnation, unknown atm
 }
 
 type Frame struct { // can recreate
@@ -270,30 +271,51 @@ func doEverything(outputFolder string, dataDir string, manifest FullManifest, mo
 		defer f.Close()
 	}
 	activeFile := packages[0]
-
-	for k := uint32(0); k < uint32(len(filesSplitByIndex)); k++ {
+	filesSplitByIndexLen := uint32(len(filesSplitByIndex))
+	for k := uint32(0); k < filesSplitByIndexLen; k++ {
 		pos, _ := activeFile.Seek(0, 1)
-		fmt.Printf("Writing file %d to package %s, length ", k, activeFile.Name())
 		if bytes.Equal(newFiles[k], []byte{}) {
-			fmt.Println(len(filesSplitByIndex[k]))
-			if len(filesSplitByIndex[k]) == 0 {
-				fmt.Printf("skipping empty file %d\n", k)
+			if len(filesSplitByIndex[k]) == 0 && k > 0 { // broken file that should be removed
+				// holy moly do i not like this
+				fmt.Printf("skipping empty file %d/%d\n", k, len(filesSplitByIndex))
 				// modify newManifest.FileInfo[k-1] to have NextEntryOffset & NextEntryPackageIndex that of newManifest.FileInfo[k], and remove newManifest.FileInfo[k]
-				// untested, but i think this is correct
-				if k > 0 {
-					newManifest.FileInfo[k-1].NextEntryPackageIndex = newManifest.FileInfo[k].NextEntryPackageIndex
-					newManifest.FileInfo[k-1].NextEntryOffset = newManifest.FileInfo[k].NextEntryOffset
+				fmt.Println("removing broken entry from manifest")
+				newManifest.FileInfo[k-1].NextEntryOffset = newManifest.FileInfo[k].NextEntryOffset
+				newManifest.FileInfo[k-1].NextEntryPackageIndex = newManifest.FileInfo[k].NextEntryPackageIndex
+				newManifest.Header.Section3.ElementCount--
+				newManifest.Header.Section3.SectionSize = newManifest.Header.Section3.SectionSize - 16
+				// at this point every entry trying to index files >k will be broken, so decrement them by one
+				for i := 0; i < len(newManifest.FrameContents); i++ {
+					if newManifest.FrameContents[i].FileIndex <= k {
+						continue
+					}
+					newManifest.FrameContents[i].FileIndex--
 				}
+				// we need to remove the faulty entry from newManifest and filesSplitByIndex
 				newManifest.FileInfo = append(newManifest.FileInfo[:k], newManifest.FileInfo[k+1:]...)
+				// loop over filesSplitByIndex and offset every entry
+				for i := k; i < uint32(len(filesSplitByIndex)); i++ {
+					if i == uint32(len(filesSplitByIndex)) {
+						filesSplitByIndexLen--
+						delete(filesSplitByIndex, i)
+						break
+					}
+					filesSplitByIndexLen--
+					filesSplitByIndex[i] = filesSplitByIndex[i+1]
+					delete(filesSplitByIndex, i+1)
+				}
+
+				k--
 				continue
 			}
+			fmt.Printf("Writing file %d to package %s, length %d\n", k, activeFile.Name(), len(filesSplitByIndex[k]))
 			numBytesWritten, err := activeFile.Write(filesSplitByIndex[k])
 			if err != nil {
 				fmt.Printf("failed to write file %d, only wrote %d bytes\n", k, numBytesWritten)
 				return err
 			}
 		} else {
-			fmt.Println(len(newFiles[k]))
+			fmt.Printf("Writing file %d to package %s, length %d\n", k, activeFile.Name(), len(newFiles[k]))
 			fmt.Printf("Compressing and writing modified file %d to disk, offset %d\n", k, pos)
 			compFile, err := compressZSTD(newFiles[k])
 			if err != nil {
@@ -316,6 +338,12 @@ func doEverything(outputFolder string, dataDir string, manifest FullManifest, mo
 
 		activeFile = packages[newManifest.FileInfo[k].NextEntryPackageIndex]
 		activeFile.Seek(int64(newManifest.FileInfo[k].NextEntryOffset), 0)
+	}
+	fmt.Println("Setting SomeStructure1's unk1 & unk2 to 0")
+
+	for i := 0; i < len(newManifest.Unk1); i++ {
+		newManifest.Unk1[i].Unk1 = 0
+		newManifest.Unk1[i].Unk2 = 0
 	}
 
 	fmt.Println("Writing modified manifest...")
@@ -349,10 +377,10 @@ func splitPackages(manifest FullManifest, dataDir string, packageName string) (m
 			if numBytesRead != int(v.CompressedSize) {
 				fmt.Printf("only read %d bytes while reading file %d, expected %d, encountered error\n", numBytesRead, k, v.CompressedSize)
 				// loop over manifest.FrameInfo to see if file exists
-				// this effectively only skips files 10302 and 10303
+				// this effectively only skips files 10301 and 10302
 				// ideally we'd want to preserve these but i'm at my wit's end regarding this
 				for _, frame := range manifest.FrameContents {
-					if frame.FileIndex == uint32(k+1) {
+					if frame.FileIndex == uint32(k) {
 						fmt.Printf("failed to read file %d with manifest entry\n", k)
 						fmt.Println("this should only happen for 10301 and 10302, check input otherwise")
 						return nil, err
@@ -573,6 +601,13 @@ func writeManifest(manifest FullManifest, outputFolder string, packageName strin
 			fmt.Println("binary.Write failed:", err)
 		}
 	}
+	jFile, err := os.OpenFile("manifest.json", os.O_RDWR|os.O_CREATE, 0777)
+	if err != nil {
+		return err
+	}
+	jBytes, _ := json.Marshal(manifest)
+	jFile.Write(jBytes)
+	jFile.Close()
 
 	os.MkdirAll(outputFolder+"/manifests/", 0777)
 	file, err := os.OpenFile(outputFolder+"/manifests/"+packageName, os.O_RDWR|os.O_CREATE, 0777)
