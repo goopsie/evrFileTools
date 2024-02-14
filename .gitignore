@@ -1,0 +1,7 @@
+Editing/
+debugging/
+manifests/
+norm/
+*.exe
+*.json
+output/
