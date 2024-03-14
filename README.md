@@ -1,8 +1,7 @@
-tool i ~~not so~~ quickly threw together to modify any file(s) in an EVR manifest/package combo.
-
 thank you Exhibitmark for doing the hard work and making [carnation](https://github.com/Exhibitmark/carnation), saved me a lot of headache reversing the manifest format :)
 
-
+tool i ~~not so~~ quickly threw together to modify any file(s) in an EVR manifest/package combo.
+Barely in a working state, please cut me some slack while i clean this up
 
 extracting files example:
 ```
