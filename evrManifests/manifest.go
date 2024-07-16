@@ -57,6 +57,10 @@ type EvrManifest struct {
 
 // end evrManifest definition
 
+// note: i have a sneaking suspicion that there's only one manifest version.
+// the ones i've looked at so far can either be extracted by 5932408047-LE2 or 5932408047-EVR
+// i think i remember being told this but i need to do more research
+
 // every manifest version will be defined in it's own file
 // each file should have functions to convert from evrManifest to it's type, and vice versa
 // each file should also have a function to read and write itself to []byte
