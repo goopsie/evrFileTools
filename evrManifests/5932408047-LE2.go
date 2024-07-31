@@ -54,12 +54,11 @@ type manifest_5932408047_LE2 struct {
 		Unk2       int64 // ? - game still launches when set to 0
 		Unk3       int64 // ? - game still launches when set to 0
 	}
-	_      [8]byte // padding(?)
 	Frames []struct {
-		CompressedSize        uint32 // compressed size of file
-		DecompressedSize      uint32 // decompressed size of file
-		NextEntryPackageIndex uint32 // the package index of the next entry
-		NextEntryOffset       uint32 // the package byte offset of the next entry
+		CurrentPackageIndex uint32 // the package index
+		CurrentOffset       uint32 // the package byte offset
+		CompressedSize      uint32 // compressed size of file
+		DecompressedSize    uint32 // decompressed size of file
 	}
 }
 
@@ -132,10 +131,10 @@ func (m *manifest_5932408047_LE2) convToEvrm() (EvrManifest, error) {
 	}
 	for k, v := range m.Frames {
 		newManifest.Frames[k] = Frame{
-			CompressedSize:        v.CompressedSize,
-			DecompressedSize:      v.DecompressedSize,
-			NextEntryPackageIndex: v.NextEntryPackageIndex,
-			NextEntryOffset:       v.NextEntryOffset,
+			CurrentPackageIndex: v.CurrentPackageIndex,
+			CurrentOffset:       v.CurrentOffset,
+			CompressedSize:      v.CompressedSize,
+			DecompressedSize:    v.DecompressedSize,
 		}
 	}
 	return newManifest, nil
@@ -200,10 +199,10 @@ func (m *manifest_5932408047_LE2) evrmToOrig(evrm EvrManifest) error {
 	}, len(evrm.SomeStructure))
 
 	m.Frames = make([]struct {
-		CompressedSize        uint32
-		DecompressedSize      uint32
-		NextEntryPackageIndex uint32
-		NextEntryOffset       uint32
+		CurrentPackageIndex uint32
+		CurrentOffset       uint32
+		CompressedSize      uint32
+		DecompressedSize    uint32
 	}, len(evrm.Frames))
 
 	for k, v := range evrm.FrameContents {
@@ -242,15 +241,15 @@ func (m *manifest_5932408047_LE2) evrmToOrig(evrm EvrManifest) error {
 
 	for k, v := range evrm.Frames {
 		m.Frames[k] = struct {
-			CompressedSize        uint32
-			DecompressedSize      uint32
-			NextEntryPackageIndex uint32
-			NextEntryOffset       uint32
+			CurrentPackageIndex uint32
+			CurrentOffset       uint32
+			CompressedSize      uint32
+			DecompressedSize    uint32
 		}{
-			CompressedSize:        v.CompressedSize,
-			DecompressedSize:      v.DecompressedSize,
-			NextEntryPackageIndex: v.NextEntryPackageIndex,
-			NextEntryOffset:       v.NextEntryOffset,
+			CurrentPackageIndex: v.CurrentPackageIndex,
+			CurrentOffset:       v.CurrentOffset,
+			CompressedSize:      v.CompressedSize,
+			DecompressedSize:    v.DecompressedSize,
 		}
 	}
 
@@ -281,10 +280,10 @@ func (m *manifest_5932408047_LE2) unmarshalManifest(b []byte) error {
 		Unk3       int64
 	}, m.Header.SomeStructure.ElementCount)
 	m.Frames = make([]struct {
-		CompressedSize        uint32
-		DecompressedSize      uint32
-		NextEntryPackageIndex uint32
-		NextEntryOffset       uint32
+		CurrentPackageIndex uint32
+		CurrentOffset       uint32
+		CompressedSize      uint32
+		DecompressedSize    uint32
 	}, m.Header.Frames.ElementCount)
 
 	buf = bytes.NewReader(b[currentOffset : currentOffset+binary.Size(m.FrameContents)])

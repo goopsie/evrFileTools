@@ -54,12 +54,11 @@ type manifest_5868485946_EVR struct {
 		Unk3       uint32
 		Unk4       uint32
 	}
-	_      [8]byte
 	Frames []struct {
-		CompressedSize        uint32
-		DecompressedSize      uint32
-		NextEntryPackageIndex uint32
-		NextEntryOffset       uint32
+		CurrentPackageIndex uint32
+		CurrentOffset       uint32
+		CompressedSize      uint32
+		DecompressedSize    uint32
 	}
 }
 
@@ -109,10 +108,10 @@ func (m *manifest_5868485946_EVR) convToEvrm() (EvrManifest, error) {
 	}
 	for k, v := range m.Frames {
 		newManifest.Frames[k] = Frame{
-			CompressedSize:        v.CompressedSize,
-			DecompressedSize:      v.DecompressedSize,
-			NextEntryPackageIndex: v.NextEntryPackageIndex,
-			NextEntryOffset:       v.NextEntryOffset,
+			CurrentPackageIndex: v.CurrentPackageIndex,
+			CurrentOffset:       v.CurrentOffset,
+			CompressedSize:      v.CompressedSize,
+			DecompressedSize:    v.DecompressedSize,
 		}
 	}
 	return newManifest, nil
@@ -142,10 +141,10 @@ func (m *manifest_5868485946_EVR) unmarshalManifest(b []byte) error {
 		Unk4       uint32
 	}, m.Header.SomeStructure.ElementCount)
 	m.Frames = make([]struct {
-		CompressedSize        uint32
-		DecompressedSize      uint32
-		NextEntryPackageIndex uint32
-		NextEntryOffset       uint32
+		CurrentPackageIndex uint32
+		CurrentOffset       uint32
+		CompressedSize      uint32
+		DecompressedSize    uint32
 	}, m.Header.Frames.ElementCount)
 
 	buf = bytes.NewReader(b[currentOffset : currentOffset+binary.Size(m.FrameContents)])
@@ -159,9 +158,7 @@ func (m *manifest_5868485946_EVR) unmarshalManifest(b []byte) error {
 		return err
 	}
 	currentOffset += binary.Size(m.SomeStructure)
-	currentOffset += 8 // skip over padding
 
-	b = append(b, make([]byte, 8)...) // hacky way to read end of manifest as Frame
 	buf = bytes.NewReader(b[currentOffset : currentOffset+binary.Size(m.Frames)])
 	if err := binary.Read(buf, binary.LittleEndian, &m.Frames); err != nil {
 		return err

@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -66,28 +65,29 @@ func init() {
 
 	if help {
 		flag.Usage()
-		return
+		os.Exit(0)
 	}
 
-	if mode == "jsonmanifest" && dataDir != "" {
-		return
+	if mode == "jsonmanifest" && dataDir == "" {
+		fmt.Println("'-mode jsonmanifest' must be used in conjunction with '-dataDir'")
+		os.Exit(1)
 	}
 
 	if help || len(os.Args) == 1 || mode == "" || outputDir == "" {
 		flag.Usage()
-		return
+		os.Exit(1)
 	}
 
 	if mode != "extract" && mode != "build" && mode != "replace" && mode != "jsonmanifest" {
 		fmt.Println("mode must be one of the following: 'extract', 'build', 'replace', 'jsonmanifest'")
 		flag.Usage()
-		return
+		os.Exit(1)
 	}
 
 	if mode == "build" && inputDir == "" {
-		fmt.Println("'build' must be used in conjunction with '-inputDir'")
+		fmt.Println("'-mode build' must be used in conjunction with '-inputDir'")
 		flag.Usage()
-		return
+		os.Exit(1)
 	}
 }
 
@@ -265,27 +265,17 @@ func rebuildPackageManifestCombo(fileMap [][]newFile) error {
 			fmt.Println("failed to stat package for weirddata writing")
 			return err
 		}
-		if i == 0 {
-			manifest.Frames[len(manifest.Frames)-1].NextEntryOffset = uint32(packageStats.Size())
-			manifest.Frames[len(manifest.Frames)-1].NextEntryPackageIndex = 0
-			continue
-		}
 		newEntry := evrm.Frame{
-			CompressedSize:        0, // TODO: find out what this actually is
-			DecompressedSize:      0,
-			NextEntryPackageIndex: i,
-			NextEntryOffset:       uint32(packageStats.Size()),
+			CurrentPackageIndex: i,
+			CurrentOffset:       uint32(packageStats.Size()),
+			CompressedSize:      0, // TODO: find out what this actually is
+			DecompressedSize:    0,
 		}
 		manifest.Frames = append(manifest.Frames, newEntry)
 		manifest.Header.Frames = incrementHeaderChunk(manifest.Header.Frames, 1)
 	}
 
-	newEntry := evrm.Frame{
-		CompressedSize:        0, // TODO: find out what this actually is, this is the only populated field in this entry
-		DecompressedSize:      0,
-		NextEntryPackageIndex: 0,
-		NextEntryOffset:       0,
-	}
+	newEntry := evrm.Frame{} // CompressedSize here is a populated field, but i don't know what it's used for
 
 	manifest.Frames = append(manifest.Frames, newEntry)
 	manifest.Header.Frames = incrementHeaderChunk(manifest.Header.Frames, 1)
@@ -301,32 +291,26 @@ func rebuildPackageManifestCombo(fileMap [][]newFile) error {
 // Takes a fileGroup, appends the data contained into whichever package set is specified.
 // Modifies provided manifest to match the appended data.
 func appendChunkToPackages(manifest *evrm.EvrManifest, currentFileGroup fileGroup) error {
+	os.MkdirAll(fmt.Sprintf("%s/packages", outputDir), 0777)
+
+	// current frame var to avoid confusing myself
+	cEntry := evrm.Frame{}
 	activePackageNum := uint32(0)
 	if len(manifest.Frames) > 0 {
-		activePackageNum = manifest.Frames[len(manifest.Frames)-1].NextEntryPackageIndex
+		cEntry = manifest.Frames[len(manifest.Frames)-1]
+		activePackageNum = cEntry.CurrentPackageIndex
 	}
 	compFile, err := zstd.CompressLevel(nil, currentFileGroup.currentData.Bytes(), compressionLevel)
 	if err != nil {
 		return err
 	}
-	os.MkdirAll(fmt.Sprintf("%s/packages", outputDir), 0777)
 
 	currentPackagePath := fmt.Sprintf("%s/packages/%s_%d", outputDir, packageName, activePackageNum)
 
-	for {
-		currentPackageSize := 0
-		if len(manifest.Frames) > 0 {
-			currentPackageSize = int(manifest.Frames[len(manifest.Frames)-1].NextEntryOffset)
-		}
-		if len(compFile)+currentPackageSize > math.MaxInt32 {
-			activePackageNum++
-			manifest.Header.PackageCount = activePackageNum + 1
-			manifest.Frames[len(manifest.Frames)-1].NextEntryPackageIndex = activePackageNum
-			manifest.Frames[len(manifest.Frames)-1].NextEntryOffset = 0
-			currentPackagePath = fmt.Sprintf("%s/packages/%s_%d", outputDir, packageName, activePackageNum)
-		} else {
-			break
-		}
+	if int(cEntry.CurrentOffset+cEntry.CompressedSize)+len(compFile) > math.MaxInt32 {
+		activePackageNum++
+		manifest.Header.PackageCount = activePackageNum + 1
+		currentPackagePath = fmt.Sprintf("%s/packages/%s_%d", outputDir, packageName, activePackageNum)
 	}
 
 	f, err := os.OpenFile(currentPackagePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0777)
@@ -334,24 +318,19 @@ func appendChunkToPackages(manifest *evrm.EvrManifest, currentFileGroup fileGrou
 		return err
 	}
 	defer f.Close()
-	numWrittenBytes, err := f.Write(compFile)
+	_, err = f.Write(compFile)
 	if err != nil {
 		return err
 	}
-	if numWrittenBytes != len(compFile) {
-		return errors.New("failed to write all bytes to package")
-	}
-
-	nextOffset := uint32(0)
-	if len(manifest.Frames) > 0 {
-		nextOffset = manifest.Frames[len(manifest.Frames)-1].NextEntryOffset
-	}
 
 	newEntry := evrm.Frame{
-		CompressedSize:        uint32(numWrittenBytes),
-		DecompressedSize:      uint32(currentFileGroup.currentData.Len()),
-		NextEntryPackageIndex: activePackageNum,
-		NextEntryOffset:       nextOffset + uint32(numWrittenBytes),
+		CurrentPackageIndex: activePackageNum,
+		CurrentOffset:       cEntry.CurrentOffset + cEntry.CompressedSize,
+		CompressedSize:      uint32(len(compFile)),
+		DecompressedSize:    uint32(currentFileGroup.currentData.Len()),
+	}
+	if newEntry.CurrentOffset+newEntry.CompressedSize > math.MaxInt32 {
+		newEntry.CurrentOffset = 0
 	}
 
 	manifest.Frames = append(manifest.Frames, newEntry)
@@ -414,8 +393,11 @@ func extractFilesFromPackage(fullManifest evrm.EvrManifest) error {
 		packages[uint32(i)] = f
 		defer f.Close()
 	}
-	activeFile := packages[0]
+
 	for k, v := range fullManifest.Frames {
+		activeFile := packages[v.CurrentPackageIndex]
+		activeFile.Seek(int64(v.CurrentOffset), 0)
+
 		splitFile := make([]byte, v.CompressedSize)
 		if v.CompressedSize == 0 {
 			fmt.Println("skipping invalid entry with 0 compressed size")
@@ -430,9 +412,6 @@ func extractFilesFromPackage(fullManifest evrm.EvrManifest) error {
 			fmt.Println("failed to read file, check input")
 			return err
 		}
-
-		activeFile = packages[v.NextEntryPackageIndex]
-		activeFile.Seek(int64(v.NextEntryOffset), 0)
 
 		fmt.Printf("Decompressing and extracting files contained in file index %d, %d/%d\n", k, totalFilesWritten, fullManifest.Header.FrameContents.Count)
 		decompBytes, err := decompressZSTD(splitFile)
@@ -475,15 +454,6 @@ func incrementHeaderChunk(chunk evrm.HeaderChunk, amount int) evrm.HeaderChunk {
 	return chunk
 }
 
-func decrementHeaderChunk(chunk evrm.HeaderChunk, amount int) evrm.HeaderChunk {
-	for i := 0; i < amount; i++ {
-		chunk.Count--
-		chunk.ElementCount--
-		chunk.SectionSize -= uint64(chunk.ElementSize)
-	}
-	return chunk
-}
-
 func writeManifest(manifest evrm.EvrManifest) error {
 	os.MkdirAll(outputDir+"/manifests/", 0777)
 	file, err := os.OpenFile(outputDir+"/manifests/"+packageName, os.O_RDWR|os.O_CREATE, 0777)
@@ -515,6 +485,6 @@ func compressManifest(b []byte) []byte {
 
 	fBuf := bytes.NewBuffer(nil)
 	binary.Write(fBuf, binary.LittleEndian, cHeader)
-
-	return append(fBuf.Bytes(), zstdBytes...)
+	fBuf.Write(zstdBytes)
+	return fBuf.Bytes()
 }

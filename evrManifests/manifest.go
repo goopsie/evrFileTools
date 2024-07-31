@@ -41,17 +41,16 @@ type SomeStructure struct { // 40 bytes
 }
 
 type Frame struct { // 16 bytes
-	CompressedSize        uint32 // compressed size of file
-	DecompressedSize      uint32 // decompressed size of file
-	NextEntryPackageIndex uint32 // the package index of the next entry
-	NextEntryOffset       uint32 // the package byte offset of the next entry
+	CurrentPackageIndex uint32 // the package index
+	CurrentOffset       uint32 // the package byte offset
+	CompressedSize      uint32 // compressed size of file
+	DecompressedSize    uint32 // decompressed size of file
 }
 
 type EvrManifest struct {
 	Header        ManifestHeader
 	FrameContents []FrameContents
 	SomeStructure []SomeStructure
-	_             [8]byte
 	Frames        []Frame
 }
 

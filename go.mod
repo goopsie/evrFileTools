@@ -1,5 +1,5 @@
-module echoModifyFiles
+module github.com/goopsie/echoModifyFiles
 
 go 1.21.5
 
-require github.com/klauspost/compress v1.17.4
+require github.com/DataDog/zstd v1.5.5
