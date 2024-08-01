@@ -6,14 +6,17 @@ thank you Exhibitmark for doing the hard work and making [carnation](https://git
 
 extracting files example:
 ```
-evr_replacefile -mode extract -packageName 48037dc70b0ecab2 -dataDir C:\Games\Oculus\Software\ready-at-dawn-echo-arena\_data\5932408047\rad15\win10 -outputFolder ./output/
+evrFileTools -mode extract -packageName 48037dc70b0ecab2 -dataDir ./ -outputDir ./output/
 ```
 this will extract and write out every file contained in the package to outputFolder.
 the names of the subfolders created in outputFolder are the filetype symbols, the files contained within are named with their respective symbols.
+If the `-outputPreserveGroups` flag is provided, there will be folders created to seperate each frame. This is currently the directory structure that `-mode build` expects.
+
 
 replacing files example:
 ```
-evr_replacefile -mode replace -packageName 48037dc70b0ecab2 -dataDir C:\Games\Oculus\Software\ready-at-dawn-echo-arena\_data\5932408047\rad15\win10 -modifiedFolder C:\Games\Oculus\Software\ready-at-dawn-echo-arena\_data\5932408047\rad15\win10\modified\ -outputFolder ./output/
+echoFileTools -mode replace -outputDir ./output/ -packageName 48037dc70b0ecab2 -dataDir ./ -inputDir ./input/
 ```
-this will read all files in modifiedFolder, expecting the same folder structure as -mode extract outputs.
+Directory structure of inputDir should be `./inputFolder/0/...`, where ... is the structure of `-mode extract` *without* the `-outputPreserveGroups` flag.
+e.g. if replacing the Echo VR logo DDS, the stucture would be as follows: `./input/0/-4707359568332879775/-3482028914369150717`
 if a file with the same filetype symbol & filename symbol exists in the manifest, it will edit the manifest & package file to match, and write out the contents of both to outputFolder.
