@@ -11,11 +11,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/DataDog/zstd"
-	evrm "github.com/goopsie/echoModifyFiles/evrManifests"
+	evrm "github.com/goopsie/echoFileTools/evrManifests"
 )
 
 type CompressedHeader struct { // seems to be the same across every manifest
@@ -33,25 +34,24 @@ type newFile struct { // Build manifest/package from this
 }
 
 type fileGroup struct {
-	currentData bytes.Buffer
-	fileIndex   uint32
-	fileCount   int
+	currentData      bytes.Buffer
+	decompressedSize uint32 // hack, if this is filled in, skip compressing file in appendChunkToPackages
+	fileIndex        uint32
+	fileCount        int
 }
 
 const compressionLevel = zstd.BestSpeed
 
 var (
-	mode         string
-	manifestType string
-	packageName  string
-	dataDir      string
-	inputDir     string
-	outputDir    string
-	help         bool
+	mode                 string
+	manifestType         string
+	packageName          string
+	dataDir              string
+	inputDir             string
+	outputDir            string
+	outputPreserveGroups bool
+	help                 bool
 )
-
-// TODO: debug rebuildPackageManifestCombo
-// TODO: rewrite replace file
 
 func init() {
 	flag.StringVar(&mode, "mode", "", "must be one of the following: 'extract', 'build', 'replace', 'jsonmanifest'")
@@ -60,6 +60,7 @@ func init() {
 	flag.StringVar(&dataDir, "dataDir", "", "Path of directory containing 'manifests' & 'packages' in ready-at-dawn-echo-arena/_data")
 	flag.StringVar(&inputDir, "inputDir", "", "Path of directory containing modified files (same structure as '-mode extract' output)")
 	flag.StringVar(&outputDir, "outputDir", "", "Path of directory to place modified package & manifest files")
+	flag.BoolVar(&outputPreserveGroups, "outputPreserveGroups", false, "If true, preserve groups during '-mode extract', e.g. './output/1.../fileType/fileSymbol' instead of './output/fileType/fileSymbol'")
 	flag.BoolVar(&help, "help", false, "Print usage")
 	flag.Parse()
 
@@ -168,7 +169,157 @@ func main() {
 }
 
 func replaceFiles(fileMap [][]newFile, manifest evrm.EvrManifest) error {
-	// really need to find out grouping rules... [][]newFile is really ugly
+	// this is a clusterfuck
+
+	modifiedFrames := make(map[uint32]bool, manifest.Header.Frames.Count)
+	frameContentsLookupTable := make(map[[128]byte]evrm.FrameContents, manifest.Header.FrameContents.Count)
+	modifiedFilesLookupTable := make(map[[128]byte]newFile, len(fileMap[0]))
+	for _, v := range manifest.FrameContents {
+		// foo[v.T and v.FileSymbol]
+		// should equal 128 bytes
+		buf := [128]byte{}
+		binary.LittleEndian.PutUint64(buf[0:64], uint64(v.T))
+		binary.LittleEndian.PutUint64(buf[64:128], uint64(v.FileSymbol))
+		frameContentsLookupTable[buf] = v
+	}
+	for _, v := range fileMap[0] {
+		buf := [128]byte{}
+		binary.LittleEndian.PutUint64(buf[0:64], uint64(v.TypeSymbol))
+		binary.LittleEndian.PutUint64(buf[64:128], uint64(v.FileSymbol))
+		modifiedFrames[frameContentsLookupTable[buf].FileIndex] = true
+		modifiedFilesLookupTable[buf] = v
+	}
+
+	packages := make(map[uint32]*os.File)
+
+	for i := 0; i < int(manifest.Header.PackageCount); i++ {
+		pFilePath := fmt.Sprintf("%s/packages/%s_%d", dataDir, packageName, i)
+		f, err := os.Open(pFilePath)
+		if err != nil {
+			fmt.Printf("failed to open package %s\n", pFilePath)
+			return err
+		}
+		packages[uint32(i)] = f
+		defer f.Close()
+	}
+
+	newManifest := manifest
+	newManifest.Frames = make([]evrm.Frame, 0)
+	newManifest.Header.Frames = evrm.HeaderChunk{SectionSize: 0, Unk1: 0, Unk2: 0, ElementSize: 16, Count: 0, ElementCount: 0}
+
+	for i := 0; i < int(manifest.Header.Frames.Count); i++ {
+		v := manifest.Frames[i]
+		activeFile := packages[v.CurrentPackageIndex]
+		activeFile.Seek(int64(v.CurrentOffset), 0)
+		splitFile := make([]byte, v.CompressedSize)
+		if v.CompressedSize == 0 {
+			continue
+		}
+		_, err := io.ReadAtLeast(activeFile, splitFile, int(v.CompressedSize))
+		if err != nil && v.DecompressedSize == 0 {
+			continue
+		} else if err != nil {
+			return err
+		}
+
+		if !modifiedFrames[uint32(i)] {
+			// there are a few frames that aren't actually real, one for each package, and one at the end that i don't understand. ...frames.Count is from 1, i from 0
+			fmt.Printf("\033[2K\rWriting stock frame %d/%d", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
+			appendChunkToPackages(&newManifest, fileGroup{currentData: *bytes.NewBuffer(splitFile), decompressedSize: v.DecompressedSize})
+			continue
+		}
+
+		// there are a few frames that aren't actually real, one for each package, and one at the end that i don't understand. ...frames.Count is from 1, i from 0
+		fmt.Printf("\033[2K\rWriting modified frame %d/%d", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
+
+		decompFile, err := decompressZSTD(splitFile)
+		if err != nil {
+			return err
+		}
+		type fcWrapper struct { // purely to keep index and framecontents entry in sync
+			index int
+			fc    evrm.FrameContents
+		}
+
+		sortedFrameContents := make([]fcWrapper, 0)
+
+		for k, v := range manifest.FrameContents {
+			if modifiedFrames[v.FileIndex] {
+				sortedFrameContents = append(sortedFrameContents, fcWrapper{index: k, fc: v})
+			}
+		}
+		// sort fcWrapper by fc.DataOffset
+		sort.Slice(sortedFrameContents, func(i, j int) bool {
+			return sortedFrameContents[i].fc.DataOffset < sortedFrameContents[j].fc.DataOffset
+		})
+
+		constructedFile := bytes.NewBuffer([]byte{})
+		for j := 0; j < len(sortedFrameContents); j++ {
+			// make sure that we aren't writing original data when we're supposed to be writing modified data
+			buf := [128]byte{}
+			binary.LittleEndian.PutUint64(buf[0:64], uint64(sortedFrameContents[j].fc.T))
+			binary.LittleEndian.PutUint64(buf[64:128], uint64(sortedFrameContents[j].fc.FileSymbol))
+			if modifiedFilesLookupTable[buf].FileSymbol != 0 {
+				// read file, modify manifest, append data to constructedFile
+				file, err := os.ReadFile(modifiedFilesLookupTable[buf].ModifiedFilePath)
+				if err != nil {
+					return err
+				}
+				newManifest.FrameContents[sortedFrameContents[j].index] = evrm.FrameContents{
+					T:             sortedFrameContents[j].fc.T,
+					FileSymbol:    sortedFrameContents[j].fc.FileSymbol,
+					FileIndex:     sortedFrameContents[j].fc.FileIndex,
+					DataOffset:    uint32(constructedFile.Len()),
+					Size:          uint32(len(file)),
+					SomeAlignment: sortedFrameContents[j].fc.SomeAlignment,
+				}
+
+				constructedFile.Write(file)
+				continue
+			}
+
+			newManifest.FrameContents[sortedFrameContents[j].index] = evrm.FrameContents{
+				T:             sortedFrameContents[j].fc.T,
+				FileSymbol:    sortedFrameContents[j].fc.FileSymbol,
+				FileIndex:     sortedFrameContents[j].fc.FileIndex,
+				DataOffset:    uint32(constructedFile.Len()),
+				Size:          sortedFrameContents[j].fc.Size,
+				SomeAlignment: sortedFrameContents[j].fc.SomeAlignment,
+			}
+			constructedFile.Write(decompFile[sortedFrameContents[j].fc.DataOffset : sortedFrameContents[j].fc.DataOffset+sortedFrameContents[j].fc.Size])
+		}
+
+		appendChunkToPackages(&newManifest, fileGroup{currentData: *constructedFile})
+	}
+
+	// weirddata
+
+	for i := uint32(0); i < newManifest.Header.PackageCount; i++ {
+		packageStats, err := os.Stat(fmt.Sprintf("%s/packages/%s_%d", outputDir, packageName, i))
+		if err != nil {
+			fmt.Println("failed to stat package for weirddata writing")
+			return err
+		}
+		newEntry := evrm.Frame{
+			CurrentPackageIndex: i,
+			CurrentOffset:       uint32(packageStats.Size()),
+			CompressedSize:      0, // TODO: find out what this actually is
+			DecompressedSize:    0,
+		}
+		newManifest.Frames = append(newManifest.Frames, newEntry)
+		newManifest.Header.Frames = incrementHeaderChunk(newManifest.Header.Frames, 1)
+	}
+
+	newEntry := evrm.Frame{} // CompressedSize here is a populated field, but i don't know what it's used for
+
+	newManifest.Frames = append(newManifest.Frames, newEntry)
+	newManifest.Header.Frames = incrementHeaderChunk(newManifest.Header.Frames, 1)
+
+	// write new manifest
+	err := writeManifest(newManifest)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -293,16 +444,17 @@ func rebuildPackageManifestCombo(fileMap [][]newFile) error {
 func appendChunkToPackages(manifest *evrm.EvrManifest, currentFileGroup fileGroup) error {
 	os.MkdirAll(fmt.Sprintf("%s/packages", outputDir), 0777)
 
-	// current frame var to avoid confusing myself
 	cEntry := evrm.Frame{}
 	activePackageNum := uint32(0)
 	if len(manifest.Frames) > 0 {
 		cEntry = manifest.Frames[len(manifest.Frames)-1]
 		activePackageNum = cEntry.CurrentPackageIndex
 	}
-	compFile, err := zstd.CompressLevel(nil, currentFileGroup.currentData.Bytes(), compressionLevel)
-	if err != nil {
-		return err
+	var compFile []byte
+	if currentFileGroup.decompressedSize != 0 {
+		compFile = currentFileGroup.currentData.Bytes()
+	} else {
+		compFile, _ = zstd.CompressLevel(nil, currentFileGroup.currentData.Bytes(), compressionLevel)
 	}
 
 	currentPackagePath := fmt.Sprintf("%s/packages/%s_%d", outputDir, packageName, activePackageNum)
@@ -331,6 +483,9 @@ func appendChunkToPackages(manifest *evrm.EvrManifest, currentFileGroup fileGrou
 	}
 	if newEntry.CurrentOffset+newEntry.CompressedSize > math.MaxInt32 {
 		newEntry.CurrentOffset = 0
+	}
+	if currentFileGroup.decompressedSize != 0 {
+		newEntry.DecompressedSize = currentFileGroup.decompressedSize
 	}
 
 	manifest.Frames = append(manifest.Frames, newEntry)
@@ -429,9 +584,12 @@ func extractFilesFromPackage(fullManifest evrm.EvrManifest) error {
 			}
 			fileName := strconv.FormatInt(v2.FileSymbol, 10)
 			fileType := strconv.FormatInt(v2.T, 10)
-			os.MkdirAll(fmt.Sprintf("%s/%s", outputDir, fileType), 0777)
-
-			file, err := os.OpenFile(fmt.Sprintf("%s/%s/%s", outputDir, fileType, fileName), os.O_RDWR|os.O_CREATE, 0777)
+			basePath := fmt.Sprintf("%s/%s", outputDir, fileType)
+			if outputPreserveGroups {
+				basePath = fmt.Sprintf("%s/%d/%s", outputDir, v2.FileIndex, fileType)
+			}
+			os.MkdirAll(basePath, 0777)
+			file, err := os.OpenFile(fmt.Sprintf("%s/%s", basePath, fileName), os.O_RDWR|os.O_CREATE, 0777)
 			if err != nil {
 				fmt.Println(err)
 				continue
