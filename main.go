@@ -224,14 +224,15 @@ func replaceFiles(fileMap [][]newFile, manifest evrm.EvrManifest) error {
 
 		if !modifiedFrames[uint32(i)] {
 			// there are a few frames that aren't actually real, one for each package, and one at the end that i don't understand. ...frames.Count is from 1, i from 0
-			fmt.Printf("\033[2K\rWriting stock frame %d/%d", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
+			// fmt.Printf("\033[2K\rWriting stock frame %d/%d", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
+			fmt.Printf("Writing stock frame %d/%d\n", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
 			appendChunkToPackages(&newManifest, fileGroup{currentData: *bytes.NewBuffer(splitFile), decompressedSize: v.DecompressedSize})
 			continue
 		}
 
 		// there are a few frames that aren't actually real, one for each package, and one at the end that i don't understand. ...frames.Count is from 1, i from 0
-		fmt.Printf("\033[2K\rWriting modified frame %d/%d", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
-
+		// fmt.Printf("\033[2K\rWriting modified frame %d/%d", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
+		fmt.Printf("Writing modified frame %d/%d\n", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
 		decompFile, err := decompressZSTD(splitFile)
 		if err != nil {
 			return err
@@ -286,6 +287,7 @@ func replaceFiles(fileMap [][]newFile, manifest evrm.EvrManifest) error {
 				Size:          sortedFrameContents[j].fc.Size,
 				SomeAlignment: sortedFrameContents[j].fc.SomeAlignment,
 			}
+			fmt.Printf("DataOffset of file: %d, Size: %d, Total open file size: %d\n", sortedFrameContents[j].fc.DataOffset, sortedFrameContents[j].fc.Size, len(decompFile))
 			constructedFile.Write(decompFile[sortedFrameContents[j].fc.DataOffset : sortedFrameContents[j].fc.DataOffset+sortedFrameContents[j].fc.Size])
 		}
 
@@ -509,9 +511,10 @@ func scanPackageFiles() ([][]newFile, error) {
 		newFile := newFile{}
 		newFile.ModifiedFilePath = path
 		newFile.FileSize = uint32(info.Size())
-		dir1 := strings.Split(path, "\\")[len(strings.Split(path, "\\"))-3]
-		dir2 := strings.Split(path, "\\")[len(strings.Split(path, "\\"))-2]
-		dir3 := strings.Split(path, "\\")[len(strings.Split(path, "\\"))-1]
+		foo := strings.Split(filepath.ToSlash(path), "/")
+		dir1 := foo[len(foo)-3]
+		dir2 := foo[len(foo)-2]
+		dir3 := foo[len(foo)-1]
 		chunkNum, err := strconv.ParseInt(dir1, 10, 64)
 		if err != nil {
 			return err
