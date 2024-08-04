@@ -224,31 +224,33 @@ func replaceFiles(fileMap [][]newFile, manifest evrm.EvrManifest) error {
 
 		if !modifiedFrames[uint32(i)] {
 			// there are a few frames that aren't actually real, one for each package, and one at the end that i don't understand. ...frames.Count is from 1, i from 0
-			// fmt.Printf("\033[2K\rWriting stock frame %d/%d", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
-			fmt.Printf("Writing stock frame %d/%d\n", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
+			fmt.Printf("\033[2K\rWriting stock frame %d/%d", i, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
 			appendChunkToPackages(&newManifest, fileGroup{currentData: *bytes.NewBuffer(splitFile), decompressedSize: v.DecompressedSize})
 			continue
 		}
 
 		// there are a few frames that aren't actually real, one for each package, and one at the end that i don't understand. ...frames.Count is from 1, i from 0
-		// fmt.Printf("\033[2K\rWriting modified frame %d/%d", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
-		fmt.Printf("Writing modified frame %d/%d\n", i+1, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
+		fmt.Printf("\033[2K\rWriting modified frame %d/%d", i, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
 		decompFile, err := decompressZSTD(splitFile)
 		if err != nil {
 			return err
 		}
 		type fcWrapper struct { // purely to keep index and framecontents entry in sync
-			index int
+			index int // original manifest FrameContents[index]
 			fc    evrm.FrameContents
 		}
 
 		sortedFrameContents := make([]fcWrapper, 0)
 
 		for k, v := range manifest.FrameContents {
+			if v.FileIndex != uint32(i) {
+				continue
+			}
 			if modifiedFrames[v.FileIndex] {
 				sortedFrameContents = append(sortedFrameContents, fcWrapper{index: k, fc: v})
 			}
 		}
+
 		// sort fcWrapper by fc.DataOffset
 		sort.Slice(sortedFrameContents, func(i, j int) bool {
 			return sortedFrameContents[i].fc.DataOffset < sortedFrameContents[j].fc.DataOffset
@@ -287,7 +289,6 @@ func replaceFiles(fileMap [][]newFile, manifest evrm.EvrManifest) error {
 				Size:          sortedFrameContents[j].fc.Size,
 				SomeAlignment: sortedFrameContents[j].fc.SomeAlignment,
 			}
-			fmt.Printf("DataOffset of file: %d, Size: %d, Total open file size: %d\n", sortedFrameContents[j].fc.DataOffset, sortedFrameContents[j].fc.Size, len(decompFile))
 			constructedFile.Write(decompFile[sortedFrameContents[j].fc.DataOffset : sortedFrameContents[j].fc.DataOffset+sortedFrameContents[j].fc.Size])
 		}
 
