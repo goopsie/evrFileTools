@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"github.com/DataDog/zstd"
-	evrm "github.com/goopsie/echoFileTools/evrManifests"
+	evrm "github.com/goopsie/evrFileTools/evrManifests"
 )
 
 type CompressedHeader struct { // seems to be the same across every manifest

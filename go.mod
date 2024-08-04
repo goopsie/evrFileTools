@@ -1,4 +1,4 @@
-module github.com/goopsie/echoModifyFiles
+module github.com/goopsie/evrFileTools
 
 go 1.21.5
 
