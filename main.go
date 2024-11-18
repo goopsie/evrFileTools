@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/DataDog/zstd"
 	evrm "github.com/goopsie/evrFileTools/evrManifests"
@@ -43,14 +44,15 @@ type fileGroup struct {
 const compressionLevel = zstd.BestSpeed
 
 var (
-	mode                 string
-	manifestType         string
-	packageName          string
-	dataDir              string
-	inputDir             string
-	outputDir            string
-	outputPreserveGroups bool
-	help                 bool
+	mode                     string
+	manifestType             string
+	packageName              string
+	dataDir                  string
+	inputDir                 string
+	outputDir                string
+	outputPreserveGroups     bool
+	help                     bool
+	ignoreOutputRestrictions bool
 )
 
 func init() {
@@ -61,6 +63,7 @@ func init() {
 	flag.StringVar(&inputDir, "inputDir", "", "Path of directory containing modified files (same structure as '-mode extract' output)")
 	flag.StringVar(&outputDir, "outputDir", "", "Path of directory to place modified package & manifest files")
 	flag.BoolVar(&outputPreserveGroups, "outputPreserveGroups", false, "If true, preserve groups during '-mode extract', e.g. './output/1.../fileType/fileSymbol' instead of './output/fileType/fileSymbol'")
+	flag.BoolVar(&ignoreOutputRestrictions, "ignoreOutputRestrictions", false, "Allows non-empty outputDir to be used.")
 	flag.BoolVar(&help, "help", false, "Print usage")
 	flag.Parse()
 
@@ -88,6 +91,23 @@ func init() {
 	if mode == "build" && inputDir == "" {
 		fmt.Println("'-mode build' must be used in conjunction with '-inputDir'")
 		flag.Usage()
+		os.Exit(1)
+	}
+
+	os.MkdirAll(outputDir, 0777)
+
+	isOutputDirEmpty := func() bool {
+		f, err := os.Open(outputDir)
+		if err != nil {
+			return false
+		}
+		defer f.Close()
+		_, err = f.Readdir(1)
+		return err == io.EOF
+	}()
+
+	if !isOutputDirEmpty && !ignoreOutputRestrictions {
+		fmt.Println("Output directory is not empty. Use '-ignoreOutputRestrictions' to override this restriction.")
 		os.Exit(1)
 	}
 }
@@ -169,14 +189,10 @@ func main() {
 }
 
 func replaceFiles(fileMap [][]newFile, manifest evrm.EvrManifest) error {
-	// this is a clusterfuck
-
 	modifiedFrames := make(map[uint32]bool, manifest.Header.Frames.Count)
 	frameContentsLookupTable := make(map[[128]byte]evrm.FrameContents, manifest.Header.FrameContents.Count)
 	modifiedFilesLookupTable := make(map[[128]byte]newFile, len(fileMap[0]))
 	for _, v := range manifest.FrameContents {
-		// foo[v.T and v.FileSymbol]
-		// should equal 128 bytes
 		buf := [128]byte{}
 		binary.LittleEndian.PutUint64(buf[0:64], uint64(v.T))
 		binary.LittleEndian.PutUint64(buf[64:128], uint64(v.FileSymbol))
@@ -207,6 +223,9 @@ func replaceFiles(fileMap [][]newFile, manifest evrm.EvrManifest) error {
 	newManifest.Frames = make([]evrm.Frame, 0)
 	newManifest.Header.Frames = evrm.HeaderChunk{SectionSize: 0, Unk1: 0, Unk2: 0, ElementSize: 16, Count: 0, ElementCount: 0}
 
+	logTimer := make(chan bool, 1)
+	go logTimerFunc(logTimer)
+
 	for i := 0; i < int(manifest.Header.Frames.Count); i++ {
 		v := manifest.Frames[i]
 		activeFile := packages[v.CurrentPackageIndex]
@@ -224,13 +243,19 @@ func replaceFiles(fileMap [][]newFile, manifest evrm.EvrManifest) error {
 
 		if !modifiedFrames[uint32(i)] {
 			// there are a few frames that aren't actually real, one for each package, and one at the end that i don't understand. ...frames.Count is from 1, i from 0
-			fmt.Printf("\033[2K\rWriting stock frame %d/%d", i, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
+			if len(logTimer) > 0 {
+				<-logTimer
+				fmt.Printf("\033[2K\rWriting stock frame %d/%d", i, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
+			}
 			appendChunkToPackages(&newManifest, fileGroup{currentData: *bytes.NewBuffer(splitFile), decompressedSize: v.DecompressedSize})
 			continue
 		}
 
 		// there are a few frames that aren't actually real, one for each package, and one at the end that i don't understand. ...frames.Count is from 1, i from 0
-		fmt.Printf("\033[2K\rWriting modified frame %d/%d", i, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
+		if len(logTimer) > 0 {
+			<-logTimer
+			fmt.Printf("\033[2K\rWriting modified frame %d/%d", i, manifest.Header.Frames.Count-uint64(manifest.Header.PackageCount)-1)
+		}
 		decompFile, err := decompressZSTD(splitFile)
 		if err != nil {
 			return err
@@ -324,6 +349,8 @@ func replaceFiles(fileMap [][]newFile, manifest evrm.EvrManifest) error {
 		return err
 	}
 
+	fmt.Printf("\nfinished, modified %d files\n", len(modifiedFilesLookupTable))
+
 	return nil
 }
 
@@ -358,7 +385,10 @@ func rebuildPackageManifestCombo(fileMap [][]newFile) error {
 	currentFileGroup := fileGroup{}
 	totalFilesWritten := 0
 
-	// preserving chunk grouping, temporary until I can figure out grouping rules
+	logTimer := make(chan bool, 1)
+	go logTimerFunc(logTimer)
+
+	// preserving chunk grouping, temporary until I can figure out grouping rules/why echo crashes with specific file groupings
 	for _, files := range fileMap {
 		if currentFileGroup.currentData.Len() != 0 {
 			if err := appendChunkToPackages(&manifest, currentFileGroup); err != nil {
@@ -398,6 +428,10 @@ func rebuildPackageManifestCombo(fileMap [][]newFile) error {
 			totalFilesWritten++
 			currentFileGroup.fileCount++
 			currentFileGroup.currentData.Write(toWrite)
+		}
+		if len(logTimer) > 0 {
+			<-logTimer
+			fmt.Printf("\033[2K\rWrote %d/%d files ", totalFilesWritten, totalFileCount)
 		}
 	}
 	if currentFileGroup.currentData.Len() > 0 {
@@ -454,10 +488,14 @@ func appendChunkToPackages(manifest *evrm.EvrManifest, currentFileGroup fileGrou
 		activePackageNum = cEntry.CurrentPackageIndex
 	}
 	var compFile []byte
+	var err error
 	if currentFileGroup.decompressedSize != 0 {
 		compFile = currentFileGroup.currentData.Bytes()
 	} else {
-		compFile, _ = zstd.CompressLevel(nil, currentFileGroup.currentData.Bytes(), compressionLevel)
+		compFile, err = zstd.CompressLevel(nil, currentFileGroup.currentData.Bytes(), compressionLevel)
+		if err != nil {
+			return err
+		}
 	}
 
 	currentPackagePath := fmt.Sprintf("%s/packages/%s_%d", outputDir, packageName, activePackageNum)
@@ -553,26 +591,30 @@ func extractFilesFromPackage(fullManifest evrm.EvrManifest) error {
 		defer f.Close()
 	}
 
+	logTimer := make(chan bool, 1)
+	go logTimerFunc(logTimer)
+
 	for k, v := range fullManifest.Frames {
 		activeFile := packages[v.CurrentPackageIndex]
 		activeFile.Seek(int64(v.CurrentOffset), 0)
 
 		splitFile := make([]byte, v.CompressedSize)
 		if v.CompressedSize == 0 {
-			fmt.Println("skipping invalid entry with 0 compressed size")
 			continue
 		}
 		_, err := io.ReadAtLeast(activeFile, splitFile, int(v.CompressedSize))
 
 		if err != nil && v.DecompressedSize == 0 {
-			fmt.Println("skipping invalid entry with 0 decompressed size")
 			continue
 		} else if err != nil {
 			fmt.Println("failed to read file, check input")
 			return err
 		}
 
-		fmt.Printf("Decompressing and extracting files contained in file index %d, %d/%d\n", k, totalFilesWritten, fullManifest.Header.FrameContents.Count)
+		if len(logTimer) > 0 {
+			<-logTimer
+			fmt.Printf("\033[2K\rDecompressing and extracting files contained in file index %d, %d/%d", k, totalFilesWritten, fullManifest.Header.FrameContents.Count)
+		}
 		decompBytes, err := decompressZSTD(splitFile)
 		if err != nil {
 			return err
@@ -649,4 +691,11 @@ func compressManifest(b []byte) []byte {
 	binary.Write(fBuf, binary.LittleEndian, cHeader)
 	fBuf.Write(zstdBytes)
 	return fBuf.Bytes()
+}
+
+func logTimerFunc(logTimer chan bool) {
+	for {
+		time.Sleep(1 * time.Second)
+		logTimer <- true
+	}
 }
