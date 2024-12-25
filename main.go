@@ -114,6 +114,7 @@ func init() {
 
 func main() {
 	if mode == "build" {
+		fmt.Println("Building list of files to package...")
 		files, err := scanPackageFiles()
 		if err != nil {
 			fmt.Printf("failed to scan %s", inputDir)
@@ -558,14 +559,17 @@ func scanPackageFiles() ([][]newFile, error) {
 		if err != nil {
 			return err
 		}
-		newFile.TypeSymbol, err = strconv.ParseInt(dir2, 10, 64)
+		uintTypeSymbol, err := strconv.ParseUint(dir2[2:], 16, 64)
 		if err != nil {
 			return err
 		}
-		newFile.FileSymbol, err = strconv.ParseInt(dir3, 10, 64)
+		newFile.TypeSymbol = int64(uintTypeSymbol)
+		uintFileSymbol, err := strconv.ParseUint(dir3[2:], 16, 64)
 		if err != nil {
 			return err
 		}
+		newFile.FileSymbol = int64(uintFileSymbol)
+
 		files[chunkNum] = append(files[chunkNum], newFile)
 		return nil
 	})
@@ -628,8 +632,8 @@ func extractFilesFromPackage(fullManifest evrm.EvrManifest) error {
 			if v2.FileIndex != uint32(k) {
 				continue
 			}
-			fileName := strconv.FormatInt(v2.FileSymbol, 10)
-			fileType := strconv.FormatInt(v2.T, 10)
+			fileName := "0x" + strconv.FormatUint(uint64(v2.FileSymbol), 16)
+			fileType := "0x" + strconv.FormatUint(uint64(v2.T), 16)
 			basePath := fmt.Sprintf("%s/%s", outputDir, fileType)
 			if outputPreserveGroups {
 				basePath = fmt.Sprintf("%s/%d/%s", outputDir, v2.FileIndex, fileType)
